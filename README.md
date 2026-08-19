@@ -16,7 +16,7 @@ free-text notes, ~20,000 planted PHI spans.
 
 ---
 
-## The four things worth reading
+## The five things worth reading
 
 ### 1. De-identification recall, measured against planted ground truth
 
