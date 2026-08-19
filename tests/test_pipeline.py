@@ -250,3 +250,103 @@ def test_decomposition_effects_and_residual_reconstruct_the_actual_change():
     total = (d["price_effect"] + d["utilisation_effect"] + d["mix_effect"]
              + d["residual"])
     assert total == pytest.approx(d["actual_change"], abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Re-identification risk
+# ---------------------------------------------------------------------------
+import reidentify as RI
+
+
+def test_k_anonymity_counts_equivalence_classes():
+    recs = [{"z": "1", "s": "F"}, {"z": "1", "s": "F"},
+            {"z": "2", "s": "M"}]
+    st = RI.k_anonymity(recs, ["z", "s"])
+    assert st["n_classes"] == 2
+    assert st["min_k"] == 1
+    assert st["records_with_k_1"] == 1
+    assert st["pct_unique"] == pytest.approx(1 / 3)
+
+
+def test_adding_a_quasi_identifier_can_only_reduce_k():
+    """Monotonicity. More attacker knowledge never makes a release safer, and
+    a risk measure that ever says otherwise is broken."""
+    rng = __import__("random").Random(4)
+    recs = [{"z": rng.choice("abc"), "s": rng.choice("FM"),
+             "a": rng.choice(["30-34", "35-39", "40-44"]),
+             "c": rng.random() < 0.2} for _ in range(600)]
+    coarse = RI.k_anonymity(recs, ["z", "s"])
+    finer = RI.k_anonymity(recs, ["z", "s", "a"])
+    finest = RI.k_anonymity(recs, ["z", "s", "a", "c"])
+    assert coarse["min_k"] >= finer["min_k"] >= finest["min_k"]
+    assert coarse["pct_unique"] <= finer["pct_unique"] <= finest["pct_unique"]
+
+
+def test_linkage_only_claims_a_hit_when_both_sides_are_unique():
+    """Conservative by design: if two people share the combination the attacker
+    has narrowed it to two, which is a privacy loss but not an identification."""
+    released = [{"member_key": "K1", "z": "1", "s": "F"},
+                {"member_key": "K2", "z": "2", "s": "M"},
+                {"member_key": "K3", "z": "2", "s": "M"}]
+    roll = [{"name": "Ann", "z": "1", "s": "F", "true_member_id": "M1"},
+            {"name": "Bob", "z": "2", "s": "M", "true_member_id": "M2"}]
+    res = RI.linkage_attack(released, roll, ["z", "s"])
+    assert res["n_reidentified"] == 1               # only the unique pair
+    assert res["sample"][0]["guessed_name"] == "Ann"
+
+
+def test_generalisation_raises_k_and_costs_records():
+    rng = __import__("random").Random(9)
+    recs = [{"zip3": rng.choice(["100", "200", "300"]),
+             "age_band": rng.choice(["30-34", "35-39", "40-44", "45-49"]),
+             "sex": rng.choice("FM")} for _ in range(400)]
+    qis = ["zip3", "age_band", "sex"]
+    kept, stats = RI.generalise_to_k(recs, qis, k=5)
+    if kept:
+        assert RI.k_anonymity(kept, qis)["min_k"] >= 5
+    assert stats["n_kept"] + stats["n_suppressed"] == len(recs)
+
+
+def test_coarsening_age_bands_suppresses_fewer_records():
+    """Generalise before suppressing. Suppression is the blunter tool and it
+    biases the release, because the rows it removes are the unusual ones."""
+    rng = __import__("random").Random(11)
+    recs = [{"zip3": rng.choice(["100", "200"]),
+             "age_band": rng.choice(["30-34", "35-39", "40-44", "45-49",
+                                     "50-54", "55-59"]),
+             "sex": rng.choice("FM")} for _ in range(300)]
+    qis = ["zip3", "age_band", "sex"]
+    _k1, plain = RI.generalise_to_k(recs, qis, k=5)
+    _k2, coarse = RI.generalise_to_k(recs, qis, k=5,
+                                     generalisations={"age_band": RI.coarsen_age_band})
+    assert coarse["n_suppressed"] <= plain["n_suppressed"]
+
+
+def test_age_band_coarsening_is_stable_and_keeps_the_90_plus_cap():
+    assert RI.coarsen_age_band("30-34") == "30-39"
+    assert RI.coarsen_age_band("35-39") == "30-39"
+    assert RI.coarsen_age_band("90+") == "90+"
+
+
+def test_a_clinical_fact_increases_exposure_over_demographics_alone():
+    """The finding the attack exists to produce: Safe Harbor output is safe
+    against a demographics-only adversary and not against one who knows a
+    single clinical fact about the target."""
+    rng = __import__("random").Random(13)
+    # Enough strata that a rare condition leaves its carriers alone in their
+    # equivalence class. With too few strata everyone hides in a crowd and the
+    # test measures nothing -- which is what the first version of it did.
+    zips = [f"{i:03d}" for i in range(100, 112)]      # 12 x 2 x 6 = 144 classes
+    bands = ["50-54", "55-59", "60-64", "65-69", "70-74", "75-79"]
+    recs = []
+    for _ in range(2000):
+        recs.append({"zip3": rng.choice(zips),
+                     "sex": rng.choice("FM"),
+                     "age_band": rng.choice(bands),
+                     "cond": rng.random() < 0.04})
+    demo = RI.k_anonymity(recs, ["zip3", "sex", "age_band"])
+    with_cond = RI.k_anonymity(recs, ["zip3", "sex", "age_band", "cond"])
+    assert with_cond["pct_unique"] >= demo["pct_unique"]
+    carriers = [r for r in recs if r["cond"]]
+    carrier_risk = RI.k_anonymity(carriers, ["zip3", "sex", "age_band", "cond"])
+    assert carrier_risk["pct_unique"] > demo["pct_unique"]
