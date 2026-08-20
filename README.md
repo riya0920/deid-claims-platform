@@ -205,7 +205,7 @@ from the same dataset on a public URL.
   dense with capitalised non-PHI — drug brands, departments, months, payers,
   facility names. Adding them made precision a measurement.
 
-## What is missing (the other 80%)
+## What is still missing
 
 - **No dbt.** Not installed. The analytics are Python functions over
   dictionaries, not models in a warehouse — no `ref()` graph, no incremental
