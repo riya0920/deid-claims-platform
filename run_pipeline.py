@@ -212,6 +212,10 @@ def main(n_members=8000):
         "quarters": {f"{y}Q{q}": {"member_months": r["member_months"],
                                   "pmpm": r["pmpm"], "paid": r["total_paid"]}
                      for (y, q), r in quarters.items()},
+        "category_cells": analytics.category_cells(data["claims"],
+                                                   START, END),
+        "geo_cells": analytics.geo_cells(data["claims"], data["members"],
+                                         START, END),
         "decomposition": dec, "concentration": conc, "risk": risk,
         "planted_shock": synth.SHOCK,
     }

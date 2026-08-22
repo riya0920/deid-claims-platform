@@ -226,3 +226,103 @@ def risk_context(members):
     return {"categories": prev,
             "mean_risk_score": sum(scores) / len(scores) if scores else 0.0,
             "n_members": n}
+
+def category_cells(claims, start, end):
+    """Per (category, quarter) cell: paid, member count, and top-contributor share.
+
+    THE MEMBER COUNT AND THE SHARE ARE THE POINT. A published cell cannot be
+    checked for disclosure risk without them:
+
+      * the COUNT decides the threshold rule (n < 11 is not an aggregate, it is
+        a small number of people with their spend printed next to their
+        condition);
+      * the SHARE decides the dominance rule, which catches the case a threshold
+        misses entirely -- a 500-member cell where one member is 95% of the
+        spend discloses that member's cost to anyone who knows they are in it.
+
+    Aggregation that throws away the count is aggregation that cannot be
+    audited, which is why this is computed alongside the rollup rather than
+    reconstructed later.
+    """
+    from collections import defaultdict
+
+    cells = defaultdict(lambda: defaultdict(float))
+    members = defaultdict(lambda: defaultdict(set))
+    per_member = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+
+    for c in claims:
+        d = c["service_date"]
+        if not (start <= d <= end):
+            continue
+        q = f"{d.year}Q{(d.month - 1) // 3 + 1}"
+        cat = c["service_category"]
+        cells[cat][q] += c["paid_amount"]
+        members[cat][q].add(c["member_id"])
+        per_member[cat][q][c["member_id"]] += c["paid_amount"]
+
+    out = {}
+    for cat, per_q in cells.items():
+        out[cat] = {}
+        for q, paid in per_q.items():
+            spends = sorted(per_member[cat][q].values(), reverse=True)
+            out[cat][q] = {
+                "paid": paid,
+                "n_members": len(members[cat][q]),
+                "top_share": (spends[0] / paid) if paid and spends else None,
+            }
+    return out
+
+def geo_cells(claims, members, start, end):
+    """Paid by (ZIP3, quarter) x service category, with counts and dominance shares.
+
+    WHY THIS GRAIN. Chosen by measurement, not by guessing:
+
+        zip3 x category                        55 cells,    0 with n<11
+        zip3 x category x quarter             440 cells,   45 with n<11
+        zip3 x sex x age-decade x category   1052 cells,  433 with n<11
+
+    Category x quarter cells in this population hold 137 to 6,311 members, so
+    no suppression rule would ever fire on them. A disclosure control that has
+    never fired is not evidence that it works -- it is evidence that nobody has
+    drilled in yet. Executives drill down until cells get small; that is what a
+    drill-down is FOR, and it is exactly when suppression starts to matter.
+
+    ZIP3 is not an arbitrary dimension either. It is one of the 18 HIPAA Safe
+    Harbor identifiers and the same quasi-identifier `reidentify.py` uses to
+    attack the member extract. The dashboard and the attack are looking at the
+    same column from opposite sides.
+
+    Rows are (ZIP3, quarter) and columns are service categories, so a row total
+    is the total spend for that geography and period -- which a dashboard would
+    naturally publish, and which is precisely what makes complementary
+    suppression necessary.
+    """
+    zip3 = {m["member_id"]: str(m["zip5"])[:3] for m in members}
+    paid = defaultdict(lambda: defaultdict(float))
+    seen = defaultdict(lambda: defaultdict(set))
+    per_member = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+
+    for c in claims:
+        d = c["service_date"]
+        if not (start <= d <= end):
+            continue
+        z = zip3.get(c["member_id"])
+        if z is None:
+            continue
+        row = f"{z} {d.year}Q{(d.month - 1) // 3 + 1}"
+        cat = c["service_category"]
+        paid[row][cat] += c["paid_amount"]
+        seen[row][cat].add(c["member_id"])
+        per_member[row][cat][c["member_id"]] += c["paid_amount"]
+
+    out = {}
+    for z, cats in paid.items():
+        out[z] = {}
+        for cat, total in cats.items():
+            spends = sorted(per_member[z][cat].values(), reverse=True)
+            out[z][cat] = {
+                "paid": total,
+                "n_members": len(seen[z][cat]),
+                "top_share": (spends[0] / total) if total and spends else None,
+            }
+    return out

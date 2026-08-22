@@ -1,4 +1,4 @@
-# DATA-1 — De-identification pipeline + claims analytics (~50% build)
+# DATA-1 — De-identification pipeline + claims analytics (~80% build)
 
 **Govern, then analyse.** The privacy layer is built as engineering with a
 measured recall number, not as a disclaimer, and the payer analytics run on its
@@ -8,7 +8,8 @@ output.
 python run_pipeline.py     # generate -> plant PHI -> de-identify -> MEASURE -> analyse
 python run_attack.py       # re-identification attack on our own output
 python write_method.py     # -> docs/DEID_METHOD.md
-python -m pytest tests -q  # 36 tests
+python dashboard.py           # -> out/dashboard.html + docs/METRIC_DICTIONARY.md
+python -m pytest tests -q     # 56 tests
 ```
 
 Runs offline in about 30 seconds. 8,000 members, ~199,000 claims, ~5,200
@@ -16,7 +17,7 @@ free-text notes, ~20,000 planted PHI spans.
 
 ---
 
-## The five things worth reading
+## The six things worth reading
 
 ### 1. De-identification recall, measured against planted ground truth
 
@@ -205,16 +206,99 @@ from the same dataset on a public URL.
   dense with capitalised non-PHI — drug brands, departments, months, payers,
   facility names. Adding them made precision a measurement.
 
+## The dashboard, the dictionary, and the suppression that had to be attacked
+
+The gap list asked for three things: a dashboard, a metric dictionary as a real
+artefact, and small-cell suppression on the analytics output. All three are
+here, and the third one is the interesting one.
+
+### Suppression is enforced at the render boundary
+
+Every cell reaches `out/dashboard.html` through `suppression.suppress_table`,
+called by the renderer. Not by convention, not by a review checklist — by the
+only code path a number has to the page. Suppression applied in the analytics
+layer protects whatever the analytics layer happened to compute; a drill-down
+added later gets an unprotected one.
+
+### Suppressing the small cells is the easy half, and is not sufficient
+
+```
+Q3 inpatient spend      total $482,000
+  cardiology            $310,000
+  oncology              $164,000
+  transplant            SUPPRESSED (n=2)
+```
+
+The transplant figure is $8,000 and anyone can subtract. The suppression is
+decorative — the number is still published, in subtraction form. Preventing
+that needs **complementary suppression**: a second cell must go, or the total
+must be withheld. On the real drill-down:
+
+| | count |
+|---|---|
+| cells rendered | 440 |
+| primary suppressions (n<11) | 45 |
+| **complementary suppressions** | **15** |
+| cells recoverable by the subtraction attack | **0** |
+
+`suppression.audit` re-runs that attack against what was actually rendered, and
+a test demonstrates it *succeeding* against a naive implementation before
+showing the complementary pass defeating it. A suppression rule that is never
+attacked is a comment.
+
+### The grain was chosen by measurement, because the rule never fired
+
+The first version suppressed nothing — category × quarter cells in this
+population hold 137 to 6,311 members. **A disclosure control that has never
+fired is not evidence that it works.** So the grains were measured:
+
+```
+zip3 x category                        55 cells,    0 with n<11
+zip3 x category x quarter             440 cells,   45 with n<11
+zip3 x sex x age-decade x category   1052 cells,  433 with n<11
+```
+
+The dashboard renders both the coarse grain (where the rule correctly leaves
+safe cells alone — a rule that fires on everything is as useless as one that
+fires on nothing) and ZIP3 × quarter × category, where it bites. ZIP3 is not an
+arbitrary choice: it is one of the 18 Safe Harbor identifiers and the same
+quasi-identifier `reidentify.py` uses to attack the member extract. **The
+dashboard and the attack are looking at the same column from opposite sides.**
+
+### Two rules, not one
+
+Threshold (n < 11, the HHS public-use convention — a convention, not a theorem)
+**and** dominance: one contributor holding ≥85% of a cell discloses their value
+to anyone who knows they are in it, *however large n is*. A 500-member cell
+that is 95% one member is a disclosure. Threshold-only suppression misses that
+case completely, which is why the (n,k) rule exists.
+
+### The metric dictionary is executable
+
+`src/metrics.py` holds the definitions as data; `docs/METRIC_DICTIONARY.md` is
+**generated** from them; the pipeline computes from the same entries. A metric
+dictionary that *can* disagree with the code is one that **will**, within about
+two sprints, and nobody notices because the analyst reads the document and the
+pipeline runs the code.
+
+Each definition carries the fields that actually get argued about — grain,
+denominator, claim basis (incurred vs paid), runout maturity, owner, and known
+caveats — including that the PMPM decomposition is **order-dependent**
+(Laspeyres with period-0 weights; period-1 weights give different attributions
+from the same data), which is why the residual is published.
+
 ## What is still missing
 
 - **No dbt.** Not installed. The analytics are Python functions over
   dictionaries, not models in a warehouse — no `ref()` graph, no incremental
   materialisation, no dbt tests, no docs site, no lineage.
-- **No dashboard.** The spec asks for a payer-executive view with drill-down.
-  Output is console tables and `out/results.json`.
-- **No metric dictionary as a separate artefact.** Definitions live in
-  `analytics.py` docstrings; a real platform needs them where an analyst reads
-  them, versioned, with owners.
+- **The dashboard is one static HTML file.** No server, no auth, no row-level
+  security, no export controls, and no access logging — and for a page with a
+  member-level drill-down, who viewed what is itself auditable information.
+- **The metric dictionary is not a semantic layer.** No `ref()` graph, no
+  materialisation, no tests attached to definitions, no access control, and no
+  approval workflow for a definition change — which is the control that
+  actually matters, since the risk is someone editing PMPM's denominator.
 - **Presidio is not used.** Hand-rolled regex + gazetteer + context rules.
   Fine for demonstrating the architecture; a real deployment uses a trained NER
   model and gets the names the gazetteer misses.
@@ -228,8 +312,15 @@ from the same dataset on a public URL.
   as one: it does not defend against an attacker who knows something outside the
   quasi-identifier set, says nothing about attribute disclosure when a whole
   equivalence class shares a diagnosis (l-diversity), and gives no formal bound.
-- **No small-cell suppression on the analytics output** — the k-anonymity work
-  is on the member extract, not on the PMPM tables.
+- **Suppression defends rows, not columns.** If a table publishes column
+  totals as well, a cell suppressed in its row is recoverable down its column,
+  and defending both at once is a linear-programming problem rather than a
+  greedy pass. Also absent: controlled rounding, cell perturbation, and — the
+  largest gap — **cross-table linkage analysis**, where two separately-safe
+  tables intersect to reveal a cell neither exposes on its own. That is where
+  real statistical agencies spend most of their effort.
+- **The complementary-cell choice is greedy, not optimal.** Suppress the next
+  smallest; a real system solves a minimisation.
 - **The generator has no realistic long tail of prevalences**, so the
   rarity-versus-exposure relationship can be predicted but not demonstrated.
 
@@ -245,4 +336,8 @@ from the same dataset on a public URL.
 | `docs/DEID_METHOD.md` | generated: the identifier table + measured performance |
 | `src/reidentify.py` | k-anonymity, linkage attack, generalisation/suppression |
 | `run_attack.py` | the attack on our own output, and the cost of the fix |
+| `src/suppression.py` | small-cell + dominance rules, complementary pass, self-audit |
+| `src/metrics.py` | the metric dictionary as data; generates the doc |
+| `dashboard.py` | payer-executive view; suppression enforced at render time |
+| `tests/test_suppression.py` | 20 tests: the attack, then the defence |
 | `tests/test_pipeline.py` | 36 tests |
