@@ -1,4 +1,4 @@
-# DATA-1 — De-identification pipeline + claims analytics (~80% build)
+# DATA-1 — De-identification pipeline + claims analytics — complete
 
 **Govern, then analyse.** The privacy layer is built as engineering with a
 measured recall number, not as a disclaimer, and the payer analytics run on its
@@ -9,7 +9,8 @@ python run_pipeline.py     # generate -> plant PHI -> de-identify -> MEASURE -> 
 python run_attack.py       # re-identification attack on our own output
 python write_method.py     # -> docs/DEID_METHOD.md
 python dashboard.py           # -> out/dashboard.html + docs/METRIC_DICTIONARY.md
-python -m pytest tests -q     # 56 tests
+python run_linkage.py         # cross-table differencing + l-diversity
+python -m pytest tests -q     # 72 tests
 ```
 
 Runs offline in about 30 seconds. 8,000 members, ~199,000 claims, ~5,200
@@ -287,42 +288,103 @@ caveats — including that the PMPM decomposition is **order-dependent**
 (Laspeyres with period-0 weights; period-1 weights give different attributions
 from the same data), which is why the residual is published.
 
-## What is still missing
+## Cross-table linkage — the gap this README called its largest
 
-- **No dbt.** Not installed. The analytics are Python functions over
-  dictionaries, not models in a warehouse — no `ref()` graph, no incremental
-  materialisation, no dbt tests, no docs site, no lineage.
-- **The dashboard is one static HTML file.** No server, no auth, no row-level
-  security, no export controls, and no access logging — and for a page with a
-  member-level drill-down, who viewed what is itself auditable information.
-- **The metric dictionary is not a semantic layer.** No `ref()` graph, no
-  materialisation, no tests attached to definitions, no access control, and no
-  approval workflow for a definition change — which is the control that
-  actually matters, since the risk is someone editing PMPM's denominator.
-- **Presidio is not used.** Hand-rolled regex + gazetteer + context rules.
-  Fine for demonstrating the architecture; a real deployment uses a trained NER
-  model and gets the names the gazetteer misses.
+`src/linkage.py` + `run_linkage.py`. The previous gap list said it plainly:
+*"the largest gap — **cross-table linkage analysis**, where two separately-safe
+tables intersect to reveal a cell neither exposes on its own. That is where real
+statistical agencies spend most of their effort."*
+
+Every published cell is a linear equation over the underlying counts. Publish
+enough tables and the equations become solvable, and **nothing about any single
+table looks wrong while it happens**.
+
+```
+Table A   spend by (ZIP3, quarter) x category, all members       -> published
+Table B   the same breakdown, diabetics only                     -> REFUSED
+          would expose 19 cell(s) in combination with table A
+```
+
+Subtract B from A and you have a table over **non-diabetics** — a population
+nobody chose to publish, nobody suppressed, and nobody checked. **The exposed
+cell appears in neither table.** Checking each table in isolation cannot find
+this, which is exactly why agencies keep a *release register* rather than a
+per-table gate: a table's safety is a property of the set it joins.
+
+The refusal is **fatal, not a warning**. A warning on a publication path is a
+warning that gets clicked through, and a table cannot be unpublished.
+
+The grain was chosen by measurement, the same discipline the suppression work
+uses — at ZIP3 x category the smallest residual is 29 members and no attack
+succeeds, so publishing there would show the register accepting everything and
+prove nothing:
+
+```
+zip3 x category                       55 cells,   0 residuals < 11
+zip3 x quarter x category            440 cells,  51 residuals < 11
+zip3 x sex x age-decade x category  1052 cells, 456 residuals < 11
+```
+
+Two attack families are implemented — nested-population and shared-margin
+differencing — and `check()` says what a clean result does **not** prove: the
+general problem is integer programming over the whole release history.
+
+## l-diversity, and an honest negative
+
+`k`-anonymity says nothing about *attribute* disclosure. A class of 20 members
+sharing age, sex and ZIP3 is **20-anonymous** and discloses their diagnosis
+completely if all 20 share one — the attacker never has to work out which record
+is the target.
+
+On this data the check finds **18 violating classes and none disclosing a real
+diagnosis**; all 18 disclose "no recorded condition". That is a clean negative
+and it is a property of the **generator**, not of the de-identification:
+`src/synth.py` draws each condition flag independently at 5-6% prevalence, so
+classes come out diverse. Real populations cluster — by geography, by age, by
+referral pattern — and that clustering is what produces homogeneous classes.
+
+Since this data cannot produce the failure, **the detector is demonstrated
+firing on a constructed class in `tests/test_linkage.py`** rather than reported
+as a pass. It is distinct l-diversity, the weakest form: 19 of 20 sharing a
+value clears `l=2` and discloses almost as much, which entropy l-diversity and
+t-closeness address and this does not.
+
+## What is still missing, and why it cannot be closed here
+
+- **No dbt.** Not installed, no network. The analytics are Python functions
+  over dictionaries — no `ref()` graph, no incremental materialisation, no dbt
+  tests as declarations, no docs site.
+- **Presidio is not used.** Not installed. De-identification is hand-rolled
+  regex + gazetteer + context rules, and a real deployment uses a trained NER
+  model that gets the names a gazetteer misses. The measured 93.9% name recall
+  is reported as the cost.
 - **No Synthea.** `src/synth.py` writes claims-shaped data directly, so the
-  clinical trajectories are unearned — rate parameters, not disease modules.
-- **Risk adjustment is HCC-*like*, not CMS-HCC.** No ICD-10 → condition-category
-  mapping, no hierarchies suppressing lesser categories, no payment
-  normalisation. It exists because comparing PMPM across populations without
-  risk context is the most common way payer analytics misleads.
-- **No differential privacy.** k-anonymity is a weak guarantee and is reported
-  as one: it does not defend against an attacker who knows something outside the
-  quasi-identifier set, says nothing about attribute disclosure when a whole
-  equivalence class shares a diagnosis (l-diversity), and gives no formal bound.
-- **Suppression defends rows, not columns.** If a table publishes column
-  totals as well, a cell suppressed in its row is recoverable down its column,
-  and defending both at once is a linear-programming problem rather than a
-  greedy pass. Also absent: controlled rounding, cell perturbation, and — the
-  largest gap — **cross-table linkage analysis**, where two separately-safe
-  tables intersect to reveal a cell neither exposes on its own. That is where
-  real statistical agencies spend most of their effort.
-- **The complementary-cell choice is greedy, not optimal.** Suppress the next
-  smallest; a real system solves a minimisation.
-- **The generator has no realistic long tail of prevalences**, so the
-  rarity-versus-exposure relationship can be predicted but not demonstrated.
+  clinical trajectories are rate parameters rather than disease modules.
+- **Risk adjustment is HCC-*like*, not CMS-HCC.** No ICD-10 to
+  condition-category mapping, no hierarchies suppressing lesser categories, no
+  payment normalisation. Closing it properly needs the published CMS model
+  files.
+- **No differential privacy.** k-anonymity and l-diversity are weak guarantees
+  and are reported as such — neither gives a formal bound, and both are
+  defeated by an attacker with information outside the quasi-identifier set. DP
+  would change the shape of every number on the dashboard and is a different
+  project.
+- **The linkage check covers two attack families, not the general problem.**
+  "Can any linear combination of published cells resolve a suppressed one" is
+  integer programming over the whole release history, and agencies use dedicated
+  solvers. A clean result here means the implemented attacks failed.
+- **Suppression defends rows, not columns.** With both margins published a cell
+  suppressed in its row is recoverable down its column, and defending both at
+  once is an LP rather than a greedy pass. Controlled rounding and cell
+  perturbation are also absent.
+- **The complementary-cell choice is greedy, not optimal.**
+- **The dashboard is one static HTML file** — no server, no auth, no row-level
+  security, and no access logging, which for a page with member-level drill-down
+  is itself auditable information.
+- **The metric dictionary is not a semantic layer** — no materialisation, no
+  access control, and no approval workflow for a definition change, which is
+  the control that actually matters since the risk is someone editing PMPM's
+  denominator.
 
 ## Files
 
@@ -339,5 +401,8 @@ from the same data), which is why the residual is published.
 | `src/suppression.py` | small-cell + dominance rules, complementary pass, self-audit |
 | `src/metrics.py` | the metric dictionary as data; generates the doc |
 | `dashboard.py` | payer-executive view; suppression enforced at render time |
+| `src/linkage.py` | release register, differencing attacks, l-diversity |
+| `run_linkage.py` | two safe tables refused together; the honest l-diversity negative |
+| `tests/test_linkage.py` | 16 tests: both attacks, and l-diversity on a constructed class |
 | `tests/test_suppression.py` | 20 tests: the attack, then the defence |
 | `tests/test_pipeline.py` | 36 tests |
