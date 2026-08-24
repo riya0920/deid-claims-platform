@@ -1,0 +1,26 @@
+version: 2
+
+models:
+  - name: fct_pmpm_monthly
+    description: PMPM by month and category, from the spine outward.
+    columns:
+      - name: pmpm
+        tests: [positive_or_zero]
+      - name: member_months
+        tests: [not_null]
+
+  - name: fct_pmpm_quarterly
+    columns:
+      - name: pmpm
+        tests: [positive_or_zero]
+
+  - name: mart_cost_concentration
+    columns:
+      - name: share_of_spend
+        tests: [not_null]
+
+  - name: mart_published_cells
+    description: Cells with small-cell suppression already applied.
+    columns:
+      - name: suppressed
+        tests: [not_null]

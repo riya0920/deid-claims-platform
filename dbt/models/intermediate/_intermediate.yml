@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: int_member_month
+    description: Prorated member-months, the denominator for every rate.
+    columns:
+      - name: member_months
+        tests:
+          - not_null
+          - positive_or_zero
+
+  - name: int_claim_month
+    columns:
+      - name: paid
+        tests: [not_null]
+      - name: service_category
+        tests: [not_null]

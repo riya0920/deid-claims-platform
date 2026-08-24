@@ -1,0 +1,9 @@
+# The dbt project reads the DE-IDENTIFIED EXTRACT ONLY. There is no connection
+# configured to anything that holds PHI, which is the point: the boundary is a
+# property of the configuration, not a rule somebody has to remember.
+claims:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH') }}"

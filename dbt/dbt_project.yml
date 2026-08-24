@@ -1,0 +1,25 @@
+name: claims
+version: "1.0.0"
+config-version: 2
+profile: claims
+
+model-paths: ["models"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  period_start: "2023-01-01"
+  period_end: "2024-12-31"
+  # Cells with fewer than this many members are not published. 11 is the CMS
+  # cell-size convention; the number is a policy, so it lives here rather than
+  # buried in a model.
+  min_cell_size: 11
+
+models:
+  claims:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: table
+    marts:
+      +materialized: table

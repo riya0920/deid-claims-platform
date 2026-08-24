@@ -10,7 +10,8 @@ python run_attack.py       # re-identification attack on our own output
 python write_method.py     # -> docs/DEID_METHOD.md
 python dashboard.py           # -> out/dashboard.html + docs/METRIC_DICTIONARY.md
 python run_linkage.py         # cross-table differencing + l-diversity
-python -m pytest tests -q     # 72 tests
+python -m pytest tests -q     # 79 tests
+python run_dbt.py             # de-identified extract -> dbt build + 31 dbt tests
 ```
 
 Runs offline in about 30 seconds. 8,000 members, ~199,000 claims, ~5,200
@@ -349,13 +350,97 @@ as a pass. It is distinct l-diversity, the weakest form: 19 of 20 sharing a
 value clears `l=2` and discloses almost as much, which entropy l-diversity and
 t-closeness address and this does not.
 
+## There is a dbt project, and the PHI boundary is a build failure
+
+`dbt/` is a graph — 3 staging views, 2 intermediate tables, 4 marts, **31 dbt
+tests** — built with `dbt-duckdb`.
+
+```bash
+python run_dbt.py             # export the de-identified extract, then dbt build
+python run_dbt.py --no-export # reuse the existing extract
+```
+
+### The architecture is the control
+
+`src/export.py` writes a de-identified extract; **dbt reads that and nothing
+else.** There is no connection configured to anything holding PHI, so *"the
+warehouse never sees an identifier"* is a property of the wiring rather than a
+rule somebody has to remember.
+
+And it is enforced. `no_phi_column_reaches_the_warehouse.sql` walks the
+information schema of every model dbt built and **fails the build** if a column
+named like a direct identifier appears anywhere. It is a name check, not a
+content check — it cannot catch PHI smuggled into a column called `notes` — but
+it catches the realistic failure, which is somebody joining the raw member table
+back in "just for debugging".
+
+`suppression_actually_fires.sql` applies the other recurring lesson: a
+suppression rule that never fires is not protecting anything, so the build
+fails if no cell is ever suppressed.
+
+### It is a second implementation, and they agree to the cent
+
+| | |
+|---|---|
+| months compared | 24 |
+| worst `member_months` difference | **0.000000000** |
+| worst `paid` difference | **0.00** |
+
+Parity is measured over the **same input**: the Python side runs on
+`export.shifted_view`, which applies the identical date shift in memory.
+Comparing dbt-on-shifted against Python-on-raw would report a difference that
+is the shift, not a disagreement.
+
+### Building it found a real bug in the generator
+
+A dbt `unique` test failed on the first build: **member id `P541509986` was
+emitted twice.** `phi.make_person` draws a 9-digit id at random, and over 8,000
+members the birthday bound gives roughly a 3% chance of a collision — which duly
+happened on the default seed.
+
+That is not cosmetic. A duplicate member lands in the dimension twice, their
+eligibility is counted twice, and **every PMPM denominator that joins through
+them is inflated.** Seventy-two passing tests never saw it, because a primary
+key is the kind of thing one declares in a schema and never writes a unit test
+for.
+
+## De-identification costs half the reporting period, and here is the number
+
+Building the extract forced a question the in-memory pipeline never had to
+answer: what happens to a **time series** when every member's dates are shifted
+by a different amount?
+
+`deid.patient_offset` returns a **negative** offset, between −1 and −364 days.
+So every member's history walks earlier, and claims near the start of the
+extract walk off the front of the window entirely:
+
+| | |
+|---|---|
+| claims in window, raw | 199,787 |
+| claims in window, shifted | 149,226 |
+| **lost** | **50,561 (25.3%)** |
+| requested window | 731 days |
+| **fully-covered window** | **368 days** |
+
+The usable window is the intersection of every member's shifted span, which is
+one shift-width narrower at each edge. With offsets spanning a year, **a
+two-year extract yields one usable year.**
+
+This does not fail loudly. It silently depresses volumes at both edges, which
+reads as a real trend — a declining-utilisation story that is entirely an
+artefact of de-identification.
+
+**It is not a bug in the shift; it is the price of the shift.** The fix is to
+extract a wider raw range than you intend to report on, not to quietly report
+over a window the data no longer covers. `export.shift_cost()` computes it, and
+four tests pin it so it cannot grow unnoticed.
+
 ## What is still missing, and why it cannot be closed here
 
-- **No dbt models.** `dbt-core` **is installed** — an earlier version of this
-  list said it was not, which was wrong. This is unbuilt, not blocked, and it
-  is the largest single gap here. The analytics are Python functions
-  over dictionaries — no `ref()` graph, no incremental materialisation, no dbt
-  tests as declarations, no docs site.
+- **The dbt project has no incremental materialisation, no snapshots, and no
+  model contracts.** The graph, the tests and the docs site are there (see
+  above); every model is a full rebuild, which is fine at 20k claims and is not
+  how a real claims warehouse runs.
 - **Presidio is not used.** Deliberately: installing it would **downgrade
   numpy 2.5.2 to 2.4.6** on this machine, and it targets free-text PHI while
   this project is structured claims — a real cost for a poor fit. Not a
@@ -408,6 +493,10 @@ t-closeness address and this does not.
 | `dashboard.py` | payer-executive view; suppression enforced at render time |
 | `src/linkage.py` | release register, differencing attacks, l-diversity |
 | `run_linkage.py` | two safe tables refused together; the honest l-diversity negative |
+| `dbt/` | 3 staging, 2 intermediate, 4 marts, 31 dbt tests |
+| `src/export.py` | the de-identified extract, and the boundary it creates |
+| `run_dbt.py` | export then dbt build |
+| `tests/test_dbt_parity.py` | 7 tests: parity, and the measured cost of shifting |
 | `tests/test_linkage.py` | 16 tests: both attacks, and l-diversity on a constructed class |
 | `tests/test_suppression.py` | 20 tests: the attack, then the defence |
 | `tests/test_pipeline.py` | 36 tests |

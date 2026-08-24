@@ -16,3 +16,10 @@ out/
 !out/
 out/*
 !out/*.png
+
+# dbt build artefacts and the generated extract. Rebuild: python run_dbt.py
+dbt/target/
+dbt/logs/
+dbt/claims.duckdb
+dbt/.user.yml
+out/extract/

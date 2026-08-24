@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: extract
+    description: >
+      The de-identified analytic extract written by src/export.py. Member ids
+      are HMAC pseudonyms, dates are shifted per member, and no direct
+      identifier is present. This is the ONLY input to the warehouse.
+    meta:
+      contains_phi: false
+    tables:
+      - name: dim_member
+        meta:
+          external_location: "{{ env_var('EXTRACT_DIR') }}/dim_member.csv"
+      - name: fct_eligibility
+        meta:
+          external_location: "{{ env_var('EXTRACT_DIR') }}/fct_eligibility.csv"
+      - name: fct_claim
+        meta:
+          external_location: "{{ env_var('EXTRACT_DIR') }}/fct_claim.csv"

@@ -73,8 +73,23 @@ def generate(n_members=8000, seed=17):
     rng = random.Random(seed)
     members, eligibility, claims, notes, truth_spans = [], [], [], [], []
 
+    # MEMBER IDS MUST BE UNIQUE, AND RANDOM DRAWS DO NOT GUARANTEE IT.
+    # phi.make_person draws a 9-digit id, and over 8,000 members the birthday
+    # bound gives roughly a 3% chance of a collision -- which duly happened on
+    # the default seed. A duplicate member_id is not cosmetic: the member lands
+    # in the dimension twice, their eligibility spans are counted twice, and
+    # every PMPM denominator that joins through them is inflated.
+    #
+    # Found by a dbt `unique` test on member_key. Nothing in the Python suite
+    # asserted it, because asserting a primary key is exactly the kind of
+    # thing one writes as a schema declaration and never as a unit test.
+    seen_ids = set()
+
     for i in range(n_members):
         p = phi.make_person(rng)
+        while p["member_id"] in seen_ids:
+            p = phi.make_person(rng)
+        seen_ids.add(p["member_id"])
         age = min(94, max(0, int(rng.gauss(52, 20))))
         member = {
             "member_id": p["member_id"], "age": age,

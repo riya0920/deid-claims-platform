@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: stg_member
+    columns:
+      - name: member_key
+        tests: [unique, not_null]
+
+  - name: stg_eligibility
+    columns:
+      - name: member_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_member')
+                field: member_key
+
+  - name: stg_claim
+    columns:
+      - name: claim_key
+        tests: [unique, not_null]
+      - name: member_key
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_member')
+                field: member_key
+      - name: paid_amount
+        tests: [not_null]
