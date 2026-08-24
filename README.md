@@ -1,4 +1,4 @@
-# DATA-1 — De-identification pipeline + claims analytics — complete
+# DATA-1 — De-identification pipeline + claims analytics — working system, 10 known gaps
 
 **Govern, then analyse.** The privacy layer is built as engineering with a
 measured recall number, not as a disclaimer, and the payer analytics run on its
