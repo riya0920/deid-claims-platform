@@ -351,10 +351,15 @@ t-closeness address and this does not.
 
 ## What is still missing, and why it cannot be closed here
 
-- **No dbt.** Not installed, no network. The analytics are Python functions
+- **No dbt models.** `dbt-core` **is installed** — an earlier version of this
+  list said it was not, which was wrong. This is unbuilt, not blocked, and it
+  is the largest single gap here. The analytics are Python functions
   over dictionaries — no `ref()` graph, no incremental materialisation, no dbt
   tests as declarations, no docs site.
-- **Presidio is not used.** Not installed. De-identification is hand-rolled
+- **Presidio is not used.** Deliberately: installing it would **downgrade
+  numpy 2.5.2 to 2.4.6** on this machine, and it targets free-text PHI while
+  this project is structured claims — a real cost for a poor fit. Not a
+  blocker, a decision. De-identification is hand-rolled
   regex + gazetteer + context rules, and a real deployment uses a trained NER
   model that gets the names a gazetteer misses. The measured 93.9% name recall
   is reported as the cost.
