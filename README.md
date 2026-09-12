@@ -12,7 +12,7 @@ python dashboard.py           # -> out/dashboard.html + docs/METRIC_DICTIONARY.m
 python run_linkage.py         # cross-table differencing + l-diversity
 python -m pytest tests -q     # 88 tests
 python run_synthea.py         # analytics on Synthea -> docs/
-python run_dbt.py             # de-identified extract -> dbt build + 31 dbt tests
+python run_dbt.py             # de-identified extract -> dbt build (9 models) + 22 dbt tests
 ```
 
 Runs offline in about 30 seconds. 8,000 members, ~199,000 claims, ~5,200
@@ -353,8 +353,7 @@ t-closeness address and this does not.
 
 ## There is a dbt project, and the PHI boundary is a build failure
 
-`dbt/` is a graph — 3 staging views, 2 intermediate tables, 4 marts, **31 dbt
-tests** — built with `dbt-duckdb`.
+`dbt/` is a graph — 3 staging views, 2 intermediate tables, 4 marts, **22 dbt tests** (31 dbt nodes total: 9 models + 22 tests, all pass) — built with `dbt-duckdb`.
 
 ```bash
 python run_dbt.py             # export the de-identified extract, then dbt build
@@ -561,7 +560,7 @@ of the tail. That limitation was not previously written down anywhere.
 | `dashboard.py` | payer-executive view; suppression enforced at render time |
 | `src/linkage.py` | release register, differencing attacks, l-diversity |
 | `run_linkage.py` | two safe tables refused together; the honest l-diversity negative |
-| `dbt/` | 3 staging, 2 intermediate, 4 marts, 31 dbt tests |
+| `dbt/` | 3 staging, 2 intermediate, 4 marts, 22 dbt tests |
 | `src/export.py` | the de-identified extract, and the boundary it creates |
 | `run_dbt.py` | export then dbt build |
 | `src/synthea_claims.py` | Synthea CSV -> this project's claim shape |
